@@ -1,34 +1,42 @@
 -- | Patch model state depending on file change event.
-module Emanote.Source.Patch (
-  patchModel,
-  filePatterns,
-  ignorePatterns,
-) where
+module Emanote.Source.Patch
+  ( patchModel,
+    filePatterns,
+    ignorePatterns,
+  )
+where
 
 import Control.Exception (throwIO)
 import Control.Monad.Logger (LoggingT (runLoggingT), MonadLogger, MonadLoggerIO (askLoggerIO))
+import Data.Aeson (Value (String))
 import Data.ByteString qualified as BS
 import Data.List.NonEmpty qualified as NEL
+import Data.Maybe.Optics ((%?))
+import Data.Text (pack)
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
 import Emanote.Model qualified as M
+import Emanote.Model.BibTeX (bibtexRoute, bibtexSource, parseBibTeX, updateBib)
 import Emanote.Model.Note qualified as N
 import Emanote.Model.SData qualified as SD
 import Emanote.Model.StaticFile (readStaticFileInfo)
 import Emanote.Model.Stork.Index qualified as Stork
 import Emanote.Model.Type (ModelEma)
-import Emanote.Prelude (
-  BadInput (BadInput),
-  log,
-  logD,
- )
+import Emanote.Prelude
+  ( BadInput (BadInput),
+    log,
+    logD,
+  )
 import Emanote.Route qualified as R
 import Emanote.Source.Loc (Loc, locResolve, userLayersToSearch)
 import Emanote.Source.Pattern (filePatterns, ignorePatterns)
 import Heist.Extra.TemplateState qualified as T
-import Optics.Operators ((%~))
+import Optics.Operators ((%~), (^.))
 import Relude
 import Relude.Extra (traverseToSnd)
 import System.UnionMount qualified as UM
+import Text.Pandoc (readBibLaTeX)
+import Text.Pandoc.Class (runPure)
+import Text.Pandoc.Options (def)
 import Text.Pandoc.Scripting (ScriptingEngine)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Directory (doesDirectoryExist)
@@ -93,7 +101,12 @@ patchModel' layers noteF storkIndexTVar scriptingEngine fpType fp action = do
               let fpAbs = head overlays
               s <- readRefreshedFile refreshAction $ locResolve fpAbs
               note <- N.parseNote scriptingEngine (userLayersToSearch layers) r fpAbs (decodeUtf8 s)
-              pure $ M.modelInsertNote $ noteF note
+              pure
+                ( \model ->
+                    let bibPath = fmap (snd . (^. bibtexSource)) (model ^. M.modelBibTeX)
+                        note' = insertBibTeXMeta bibPath note
+                     in M.modelInsertNote (noteF note') model
+                )
             UM.Delete -> do
               log $ "Removing note: " <> toText fp
               pure $ M.modelDeleteNote r
@@ -130,6 +143,20 @@ patchModel' layers noteF storkIndexTVar scriptingEngine fpType fp action = do
         UM.Delete -> do
           log $ "Removing template: " <> toText fp
           pure $ M.modelHeistTemplate %~ T.removeTemplateFile fp
+    R.BibTeX -> do
+      case R.mkRouteFromFilePath' True fp of
+        Nothing -> pure id
+        Just r -> case action of
+          UM.Refresh refreshAction overlays -> do
+            let fpAbs = head overlays
+            s <- readRefreshedFile refreshAction $ locResolve fpAbs
+            bibM <- parseBibTeX r fpAbs (decodeUtf8 s)
+            case bibM of
+              Nothing -> pure id
+              Just bib -> pure $ M.modelBibTeX %~ const (Just bib) >>> M.modelAddBibTeX (snd $ bib ^. bibtexSource)
+          UM.Delete -> do
+            log $ "Removing bibiography: " <> toText fp
+            pure M.modelDeleteBibTeX
     R.AnyExt -> do
       case R.mkRouteFromFilePath fp of
         Nothing ->
@@ -152,6 +179,10 @@ patchModel' layers noteF storkIndexTVar scriptingEngine fpType fp action = do
           UM.Delete -> do
             pure $ M.modelDeleteStaticFile r
 
+insertBibTeXMeta :: Maybe FilePath -> N.Note -> N.Note
+insertBibTeXMeta (Just bibPath) = N.noteMeta %~ updateBib (Just bibPath)
+insertBibTeXMeta Nothing = id
+
 readRefreshedFile :: (MonadLogger m, MonadIO m) => UM.RefreshAction -> FilePath -> m ByteString
 readRefreshedFile refreshAction fp =
   case refreshAction of
@@ -161,12 +192,11 @@ readRefreshedFile refreshAction fp =
     _ ->
       readFileFollowingFsnotify fp
 
-{- | Like `readFileBS` but accounts for file truncation due to us responding
- *immediately* to a fsnotify modify event (which is triggered even before the
- writer *finishes* writing the new contents). We solve this "glitch" by
- delaying the read retry, expecting (hoping really) that *this time* the new
- non-empty contents will come through. 'tis a bit of a HACK though.
--}
+-- | Like `readFileBS` but accounts for file truncation due to us responding
+-- *immediately* to a fsnotify modify event (which is triggered even before the
+-- writer *finishes* writing the new contents). We solve this "glitch" by
+-- delaying the read retry, expecting (hoping really) that *this time* the new
+-- non-empty contents will come through. 'tis a bit of a HACK though.
 readFileFollowingFsnotify :: (MonadIO m, MonadLogger m) => FilePath -> m ByteString
 readFileFollowingFsnotify fp = do
   log $ "Reading file: " <> toText fp

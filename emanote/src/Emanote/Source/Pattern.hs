@@ -17,6 +17,8 @@ filePattern = \case
   R.HeistTpl ->
     R.withExt @_ @'R.HeistTpl
       $ "**/*"
+  R.BibTeX ->
+    R.withExt @_ @'R.BibTeX "**/*"
   R.AnyExt ->
     "**"
 
@@ -27,6 +29,7 @@ filePatterns =
         , R.LMLType R.Org
         , R.Yaml
         , R.HeistTpl
+        , R.BibTeX
         , R.AnyExt
         ]
 

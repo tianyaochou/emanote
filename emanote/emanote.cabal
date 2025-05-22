@@ -160,6 +160,7 @@ library
     Emanote
     Emanote.CLI
     Emanote.Model
+    Emanote.Model.BibTeX
     Emanote.Model.Calendar
     Emanote.Model.Calendar.Parser
     Emanote.Model.Graph

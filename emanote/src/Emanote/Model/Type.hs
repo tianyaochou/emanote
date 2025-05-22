@@ -14,20 +14,21 @@ import Data.Time (UTCTime)
 import Data.Tree (Forest)
 import Data.UUID (UUID)
 import Ema.CLI qualified
+import Emanote.Model.BibTeX
 import Emanote.Model.Link.Rel (IxRel)
 import Emanote.Model.Link.Rel qualified as Rel
-import Emanote.Model.Note (
-  IxNote,
-  Note,
-  noteHasFeed,
- )
+import Emanote.Model.Note
+  ( IxNote,
+    Note,
+    noteHasFeed,
+  )
 import Emanote.Model.Note qualified as N
 import Emanote.Model.SData (IxSData, SData, sdataRoute)
-import Emanote.Model.StaticFile (
-  IxStaticFile,
-  StaticFile (StaticFile),
-  StaticFileInfo,
- )
+import Emanote.Model.StaticFile
+  ( IxStaticFile,
+    StaticFile (StaticFile),
+    StaticFileInfo,
+  )
 import Emanote.Model.Stork.Index qualified as Stork
 import Emanote.Model.Task (IxTask)
 import Emanote.Model.Task qualified as Task
@@ -48,34 +49,34 @@ data Status = Status_Loading | Status_Ready
   deriving stock (Eq, Show)
 
 data ModelT encF = Model
-  { _modelStatus :: Status
-  , _modelLayers :: Set Loc
-  , _modelEmaCLIAction :: Ema.CLI.Action
-  , _modelRoutePrism :: encF (Prism' FilePath SiteRoute)
-  , _modelPandocRenderers :: EmanotePandocRenderers Model LMLRoute
-  -- ^ Dictates how exactly to render `Pandoc` to Heist nodes.
-  , _modelCompileTailwind :: Bool
-  , _modelInstanceID :: UUID
-  -- ^ An unique ID for this process's model. ID changes across processes.
-  , _modelNotes :: IxNote
-  , _modelRels :: IxRel
-  , _modelSData :: IxSData
-  , _modelStaticFiles :: IxStaticFile
-  , _modelTasks :: IxTask
-  -- ^ A tree (forest) of all notes, based on their folder hierarchy.
-  , _modelHeistTemplate :: TemplateState
-  , _modelStorkIndex :: Stork.IndexVar
-  , _modelFolgezettelTree :: Forest R.LMLRoute
-  -- ^ Folgezettel tree computed once for each update to model.
+  { _modelStatus :: Status,
+    _modelLayers :: Set Loc,
+    _modelEmaCLIAction :: Ema.CLI.Action,
+    _modelRoutePrism :: encF (Prism' FilePath SiteRoute),
+    -- | Dictates how exactly to render `Pandoc` to Heist nodes.
+    _modelPandocRenderers :: EmanotePandocRenderers Model LMLRoute,
+    _modelCompileTailwind :: Bool,
+    -- | An unique ID for this process's model. ID changes across processes.
+    _modelInstanceID :: UUID,
+    _modelNotes :: IxNote,
+    _modelRels :: IxRel,
+    _modelSData :: IxSData,
+    _modelStaticFiles :: IxStaticFile,
+    -- | A tree (forest) of all notes, based on their folder hierarchy.
+    _modelTasks :: IxTask,
+    _modelHeistTemplate :: TemplateState,
+    _modelStorkIndex :: Stork.IndexVar,
+    -- | Folgezettel tree computed once for each update to model.
+    _modelFolgezettelTree :: Forest R.LMLRoute,
+    _modelBibTeX :: Maybe BibTeX
   }
   deriving stock (Generic)
 
 type Model = ModelT Identity
 
-{- | A bare version of `Model` that is managed by the Ema app.
-
- The only difference is that this one has no `RouteEncoder`.
--}
+-- | A bare version of `Model` that is managed by the Ema app.
+--
+-- The only difference is that this one has no `RouteEncoder`.
 type ModelEma = ModelT (Const ())
 
 deriving stock instance Generic ModelEma
@@ -97,23 +98,24 @@ withRoutePrism enc Model {..} =
 emptyModel :: Set Loc -> Ema.CLI.Action -> EmanotePandocRenderers Model LMLRoute -> Bool -> UUID -> Stork.IndexVar -> ModelEma
 emptyModel layers act ren ctw instanceId storkVar =
   Model
-    { _modelStatus = Status_Loading
-    , _modelLayers = layers
-    , _modelEmaCLIAction = act
-    , _modelRoutePrism = Const ()
-    , _modelPandocRenderers = ren
-    , _modelCompileTailwind = ctw
-    , _modelInstanceID = instanceId
-    , -- Inject a placeholder `index.md` to account for the use case of emanote
+    { _modelStatus = Status_Loading,
+      _modelLayers = layers,
+      _modelEmaCLIAction = act,
+      _modelRoutePrism = Const (),
+      _modelPandocRenderers = ren,
+      _modelCompileTailwind = ctw,
+      _modelInstanceID = instanceId,
+      -- Inject a placeholder `index.md` to account for the use case of emanote
       -- being run on an empty directory.
-      _modelNotes = Ix.empty & injectRoot
-    , _modelRels = Ix.empty
-    , _modelSData = Ix.empty
-    , _modelStaticFiles = Ix.empty
-    , _modelTasks = Ix.empty
-    , _modelHeistTemplate = def
-    , _modelStorkIndex = storkVar
-    , _modelFolgezettelTree = mempty
+      _modelNotes = Ix.empty & injectRoot,
+      _modelRels = Ix.empty,
+      _modelSData = Ix.empty,
+      _modelStaticFiles = Ix.empty,
+      _modelTasks = Ix.empty,
+      _modelHeistTemplate = def,
+      _modelStorkIndex = storkVar,
+      _modelFolgezettelTree = mempty,
+      _modelBibTeX = Nothing
     }
 
 modelReadyForView :: ModelT f -> ModelT f
@@ -128,9 +130,9 @@ modelInsertNote :: Note -> ModelT f -> ModelT f
 modelInsertNote note =
   modelNotes
     %~ ( Ix.updateIx r note
-          -- Insert folder placeholder automatically for ancestor paths
-          >>> injectAncestors (N.noteAncestors note)
-          >>> dropRedundantAncestor r
+           -- Insert folder placeholder automatically for ancestor paths
+           >>> injectAncestors (N.noteAncestors note)
+           >>> dropRedundantAncestor r
        )
       >>> modelRels
     %~ updateIxMulti r (Rel.noteRels note)
@@ -139,9 +141,8 @@ modelInsertNote note =
   where
     r = note ^. N.noteRoute
 
-{- | If a placeholder route was added already, but the newly added note is a
- non-Markdown, removce that markdown placeholder route.
--}
+-- | If a placeholder route was added already, but the newly added note is a
+-- non-Markdown, removce that markdown placeholder route.
 dropRedundantAncestor :: LMLRoute -> IxNote -> IxNote
 dropRedundantAncestor recentNoteRoute ns =
   case recentNoteRoute of
@@ -185,7 +186,7 @@ modelDeleteNote k model =
   model
     & modelNotes
     %~ ( Ix.deleteIx k
-          >>> restoreAncestor (N.RAncestor <$> mFolderR)
+           >>> restoreAncestor (N.RAncestor <$> mFolderR)
        )
       & modelRels
     %~ deleteIxMulti k
@@ -320,10 +321,9 @@ modelNoteErrors model =
       guard $ not $ null errs
       pure (note ^. N.noteRoute, errs)
 
-{- | Return the most suitable index LML route
-
-  If index.org exist, use that. Otherwise, fallback to index.md.
--}
+-- | Return the most suitable index LML route
+--
+--  If index.org exist, use that. Otherwise, fallback to index.md.
 modelIndexRoute :: ModelT f -> LMLRoute
 modelIndexRoute model = do
   resolveLmlRoute model R.indexRoute
@@ -338,16 +338,15 @@ resolveLmlRouteIfExists notes r = do
   -- TODO: Refactor using `[minBound..maxBound] :: [LML]`
   note <-
     asum
-      [ N.lookupNotesByRoute (R.LMLRoute_Org $ coerce r) notes
-      , N.lookupNotesByRoute (R.LMLRoute_Md $ coerce r) notes
+      [ N.lookupNotesByRoute (R.LMLRoute_Org $ coerce r) notes,
+        N.lookupNotesByRoute (R.LMLRoute_Md $ coerce r) notes
       ]
   pure $ note ^. N.noteRoute
 
-{- | Return the route to parent folder (unless indexRoute is passed).
-
-  This will return the existing note (.org or .md) if possible. Otherwise
-  fallback to .md even if missing.
--}
+-- | Return the route to parent folder (unless indexRoute is passed).
+--
+--  This will return the existing note (.org or .md) if possible. Otherwise
+--  fallback to .md even if missing.
 parentLmlRoute :: Model -> R.LMLRoute -> Maybe R.LMLRoute
 parentLmlRoute model r = do
   pr <- do
@@ -358,3 +357,21 @@ parentLmlRoute model r = do
     -- top-level notes.
     pure $ fromMaybe R.indexRoute $ R.withLmlRoute R.routeParent r
   pure $ resolveLmlRoute model . coerce $ pr
+
+modelAddBibTeX :: FilePath -> ModelT f -> ModelT f
+modelAddBibTeX bib =
+  modelNotes %~ (foldr (\n s -> flip Ix.insert s $ addBibTeX bib n) Ix.empty)
+
+addBibTeX :: FilePath -> Note -> Note
+addBibTeX bib =
+  N.noteMeta %~ (updateBib (Just bib))
+
+modelDeleteBibTeX :: ModelT f -> ModelT f
+modelDeleteBibTeX =
+  modelNotes %~ (foldr (\n s -> flip Ix.insert s $ removeBibTeX n) Ix.empty)
+
+removeBibTeX :: Note -> Note
+removeBibTeX =
+  N.noteMeta
+    %~ ( updateBib Nothing
+       )

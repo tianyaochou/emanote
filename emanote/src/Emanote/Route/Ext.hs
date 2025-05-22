@@ -22,6 +22,7 @@ data FileType a where
   AnyExt :: FileType SourceExt
   Html :: FileType ()
   Folder :: FileType ()
+  BibTeX :: FileType SourceExt
   deriving stock (Typeable)
 
 deriving stock instance (Eq a) => Eq (FileType a)
@@ -50,6 +51,11 @@ class HasExt (ext :: FileType a) where
 
   -- | Return the filepath without the known extension.
   withoutKnownExt :: FilePath -> Maybe FilePath
+
+instance HasExt 'BibTeX where
+  fileType = BibTeX
+  withExt = flip FP.addExtension ".bib"
+  withoutKnownExt = fpWithoutExt ".bib"
 
 instance HasExt ('LMLType 'Md) where
   fileType = LMLType Md
